@@ -17,11 +17,9 @@ local UnitName = UnitName
 local IsInInstance = IsInInstance
 local IsInGroup = IsInGroup	
 local IsInRaid = IsInRaid	
-local UnitRace = UnitRace	
 local UnitLevel = UnitLevel
 local GetNumSubgroupMembers = function() return 5 end
 local CooldownFrame_Set = CooldownFrame_SetTimer
-local LGlow = LibStub("LibButtonGlow-1.0")
 local ChatPrefix  = "ATT-CheckC" 
 local ATTversion = 7.52
 local ATTnewversion
@@ -34,9 +32,6 @@ local ATT = CreateFrame("Frame","ATT",UIParent)
 local ATTIcons = CreateFrame("Frame",nil,UIParent)
 local ATTAnchor = CreateFrame("Frame",nil,UIParent)
 local ATTTooltip = CreateFrame("GameTooltip", "ATTGameTooltip", nil, "GameTooltipTemplate")
-local ATTDampframe = CreateFrame("Frame",nil,UIParent)
-ATTDampframe:SetPoint("TOP", UIWidgetTopCenterContainerFrame, "BOTTOM", 0, 0)
-ATTDampframe:SetSize(150, 15)
 
 local iconlist = {}
 local anchors = {}
@@ -191,9 +186,33 @@ end
 local inspectData = {
 	frame = nil,
 	current = nil,
+	last = 0,
 	throttle = 0,
 	lastQuery = nil
 }
+
+function ATT:UpdateSpec(anchor, inspect)
+	local specSpells = dbSpecAbilities[anchor.class]
+
+	if specSpells then
+		anchor.spec = {}
+		-- V: foundATalent is useful to circumvent a bug where we inspect
+		--    someone before their talents loaded
+		local foundATalent = false
+		for ability, spell in pairs(specSpells) do
+			local rank = select(5,
+				GetTalentInfo(spell.talentGroup, spell.index, inspect, false, GetActiveTalentGroup(inspect))
+			)
+			local hasTalent = rank ~= nil and rank > 0
+			foundATalent = foundATalent or hasTalent
+			anchor.spec[ability] = hasTalent
+		end
+		-- V: we found no talent, that's weird. Let's remove anchor.spec so we inspect them again
+		if not foundATalent then
+			anchor.spec = nil
+		end
+	end
+end
 
 function ATT:QuerySpecInfo(elapsed)
 	inspectData.throttle = inspectData.throttle + elapsed
@@ -220,13 +239,14 @@ function ATT:QuerySpecInfo(elapsed)
 
 	if not inspectData.frame then
 		inspectData.frame = CreateFrame("Frame")
-		inspectData.frame:SetScript("OnEvent", function (self, event, ...)
+		inspectData.frame:SetScript("OnEvent", function (self, event, guid)
 			-- are we fighting
 			if InCombatLockdown() then return end
 			-- is the player inspecting
 			if InspectFrame and InspectFrame:IsShown() then return end
 
 			if not inspectData.current then return end
+			if guid ~= UnitGUID("party"..inspectData.current) then return end
 			local anchor = anchors[inspectData.current]
 			
 			if not anchor or not anchor.class then
@@ -235,25 +255,7 @@ function ATT:QuerySpecInfo(elapsed)
 				return
 			end
 
-			local specSpells = dbSpecAbilities[anchor.class]
-			
-			if specSpells then
-				anchor.spec = {}
-				-- V: foundATalent is useful to circumvent a bug where we inspect
-				--    someone before their talents loaded
-				local foundATalent = false
-				for ability, spell in pairs(specSpells) do
-					local hasTalent = select(5,
-						GetTalentInfo(spell.talentGroup, spell.index, true, false, GetActiveTalentGroup(true))
-					) > 0
-					foundATalent = foundATalent or hasTalent
-					anchor.spec[ability] = hasTalent
-				end
-				-- V: we found no talent, that's weird. Let's remove anchor.spec so we inspect them again
-				if not foundATalent then
-					anchor.spec = nil
-				end
-			end
+			ATT:UpdateSpec(anchor, true)
 
 			ATT:UpdateAnchors()
 			ClearInspectPlayer()
@@ -262,11 +264,14 @@ function ATT:QuerySpecInfo(elapsed)
 		inspectData.frame:RegisterEvent("INSPECT_TALENT_READY")
 	end
 
-	for i=1, GetNumPartyMembers() do
+	local numParty = GetNumPartyMembers()
+	for n=1, numParty do
+		local i = (inspectData.last + n - 1) % numParty + 1
 		local anchor = anchors[i]
 		if not anchor then return end
-		if (not anchor.spec or not anchor.items) and (CanInspect("party"..i) and UnitIsConnected("party"..i)) then
+		if not anchor.spec and (CanInspect("party"..i) and UnitIsConnected("party"..i)) then
 			inspectData.current = i
+			inspectData.last = i
 			inspectData.lastQuery = 0
 			NotifyInspect("party"..i)
 			break
@@ -297,19 +302,31 @@ end
 
 function ATT:FindCompactRaidFrameByUnit(unit)	
 	if not unit or not UnitGUID(unit) then return end	
+	local hiddenFrame
 	for i=1, 41 do	
 		local frame = _G["PartyMemberFrame"..i]
 		if _G["ElvUF_PartyGroup1UnitButton"..i] then frame = _G["ElvUF_PartyGroup1UnitButton"..i]	
 			elseif _G["TukuiPartyUnitButton"..i] then frame = _G["TukuiPartyUnitButton"..i]	
 			elseif _G["SUFHeaderpartyUnitButton"..i] then frame = _G["SUFHeaderpartyUnitButton"..i]	
 			elseif _G["Grid2LayoutHeader1UnitButton"..i] then frame = _G["Grid2LayoutHeader1UnitButton"..i]
+			elseif _G["CompactPartyFrameMember"..i] and _G["CompactPartyFrameMember"..i]:IsShown() then frame = _G["CompactPartyFrameMember"..i]
 			elseif _G["CompactRaidFrame"..i] then frame = _G["CompactRaidFrame"..i]
 		end
 
 		if frame and frame.unit and UnitGUID(frame.unit) == UnitGUID(unit) then	
-			return frame	
+			if frame:IsShown() then return frame end
+			hiddenFrame = hiddenFrame or frame
 		end	
 	end	
+	for group=1, 8 do
+		for member=1, 5 do
+			local frame = _G["CompactRaidGroup"..group.."Member"..member]
+			if frame and frame.unit and frame:IsShown() and UnitGUID(frame.unit) == UnitGUID(unit) then
+				return frame
+			end
+		end
+	end
+	return hiddenFrame
 end
 
 function ATT:LoadPositions()	
@@ -433,7 +450,7 @@ local function CreateIcon(anchor)
 		if db.showTooltip and icon.abilityID then	
 			ATTTooltip:ClearLines()	
 			ATTTooltip:SetOwner(WorldFrame, "ANCHOR_CURSOR")	
-			ATTTooltip:SetSpellByID(icon.abilityID)	
+			ATTTooltip:SetHyperlink("spell:"..icon.abilityID)
 		end	
 	end)	
 	icon:SetScript('OnLeave', function()	
@@ -453,10 +470,10 @@ function ATT:AddIcon(icons,anchor)
 	icons[#icons+1] = newicon
 	
 	newicon.isNeedStart = function(sentCD)
-		cooldown = tonumber(sentCD);
-		activeCooldown = newicon.cooldown
-		endTimeCooldown = newicon.starttime + activeCooldown
-		diff = endTimeCooldown - GetTime()
+		local cooldown = tonumber(sentCD);
+		local activeCooldown = newicon.cooldown
+		local endTimeCooldown = newicon.starttime + activeCooldown
+		local diff = endTimeCooldown - GetTime()
 		
 		if diff < cooldown then
 			return true
@@ -524,7 +541,7 @@ function ATT.detectConstellation(unit)
 	for key = 1, 40 do
 		local _, _, icon, _, _, duration, expirationTime, _, _, _, spellID = UnitAura(unit, key, "HARMFUL")
 		if spellID ~= nil and constellations[spellID] then
-			return constellations[spellID]
+			return constellations[spellID], spellID
 		end
 	end
 
@@ -535,12 +552,12 @@ function ATT:UpdateAnchor(unit, i, PvPTrinket, TraceID, tcooldown)
     if not self:IsShown() then return end	
     local _,class = UnitClass(unit)	
     local guid = UnitGUID(unit)	
-    local _,race = UnitRace(unit)	
     if not class or not guid then return end	
     local anchor = anchors[i]	
+    if anchor.GUID ~= guid then anchor.spec = nil end
     anchor.GUID = guid	
     anchor.class = class
-    anchor.race = race
+    if unit == "player" then self:UpdateSpec(anchor, false) end
     local icons = anchor.icons	
     local numIcons = 1	
     local _, instanceType = IsInInstance()
@@ -564,23 +581,19 @@ function ATT:UpdateAnchor(unit, i, PvPTrinket, TraceID, tcooldown)
 				icon.Stop()
 			end
 			numIcons = numIcons + 1 
-		elseif icons[1] and icons[1].ability == PvPTrinketName then
-			icons[1]:Hide()
-			icons[1].showing = nil
-			icons[1].inUse = nil
-            icons[1].spec = nil
-			table.remove(icons, 1) 
 		end	 
 
 		-- constellations
+		local sign, zodiac
 		if db.showRacial then
+			sign, zodiac = ATT.detectConstellation(unit)
+		end
+		anchor.zodiac = zodiac
 
-			local abilityTable = ATT.detectConstellation(unit)
+		if sign then
 
-			if not abilityTable then return end
-
-			local id, _icon, cooldown = abilityTable.id, abilityTable.icon, abilityTable.cd
-			ability = GetSpellInfo(id)
+			local id, _icon, cooldown = sign.id, sign.icon, sign.cd
+			local ability = GetSpellInfo(id)
 
 			local icon = icons[numIcons] or self:AddIcon(icons,anchor)
 			local texture = self:FindAbilityIcon(ability, id)
@@ -607,6 +620,7 @@ function ATT:UpdateAnchor(unit, i, PvPTrinket, TraceID, tcooldown)
 			numIcons = numIcons + 1
 		end
 		
+		anchor.spells = {}
 		local specSpells = dbSpecAbilities[anchor.class]
 		for specID, abilitiesTable in pairs(db.abilities[class]) do
 			for abilityIndex, abilityTable in pairs(abilitiesTable) do
@@ -706,7 +720,8 @@ end
 
 function ATT:TrinketCheck(unit, i)
 	local       raceID = UnitFactionGroup(unit)
-	pvpid = "42292"
+	local pvpid = "42292"
+	local TraceID
 	if raceID == "Alliance" then TraceID = GetItemIcon(18854) else TraceID = GetItemIcon(18849) end
 	local PvPTrinketName = GetSpellInfo(pvpid)
 	local PvPTrinket = { ability = PvPTrinketName, id = pvpid, cooldown = 120}
@@ -762,12 +777,9 @@ end
 
 
 function ATT:PARTY_MEMBERS_CHANGED()
-	inspectData = {
-		frame = nil,
-		current = nil,
-		throttle = 0,
-		lastQuery = nil
-	}
+	inspectData.current = nil
+	inspectData.lastQuery = nil
+	inspectData.throttle = 0
 	self:LoadPositions()
 	self:RequestSync()
 	self:UpdateAnchors()
@@ -776,6 +788,7 @@ end
 function ATT:PLAYER_ENTERING_WORLD()
 	local inInstance, instanceType = IsInInstance()
     if instanceType == "arena" then self:StopAllIcons() end 
+	for _, anchor in ipairs(anchors) do anchor.spec = nil end
 	self:LoadPositions()
 	self:RequestSync()
 	self:UpdateAnchors()
@@ -844,8 +857,8 @@ function ATT:TrackCooldown(anchor, ability, cooldown)
                 icon.newitemglowAnim:Play()
 				
 				-- Overall Cooldown
-				if overallCooldowns[anchor.race] and overallCooldowns[anchor.race][ability] then
-					for k,overallCooldown in pairs(overallCooldowns[anchor.race]) do
+				if overallCooldowns[anchor.zodiac] and overallCooldowns[anchor.zodiac][ability] then
+					for k,overallCooldown in pairs(overallCooldowns[anchor.zodiac]) do
 						if k ~= icon.ability then
 							for index,overallIcon in ipairs(anchor.icons) do
 								if overallIcon.ability == k and overallIcon.isNeedStart(overallCooldown) then
@@ -875,22 +888,7 @@ function ATT:TrackCooldown(anchor, ability, cooldown)
 			end
 		end
 	end
-end
-
-function ATT:IconGlow(unit, destUnit, spellName, event)	
-	if not unit then return end 	
-	local auraunit = unit	
-	if unit ~= destUnit then auraunit = destUnit end	
-	local index = match(unit, "party[pet]*([1-4])")	
-	if unit == "player" or unit == "pet" then	
-	if(not db.showSelf ) then return end	
-		unit = "player"	
-		index = 5	
-	elseif index then	
-		unit = "party"..index end	
-	local anchor = anchors[tonumber(index)]	
-	if not anchor or not index then return end	
-	if spellName == PvPTrinketName then return end -- blizz bugged spell	
+	if db.hidden then self:UpdateIcons() end
 end
 
 function ATT:RequestSync()
@@ -902,12 +900,11 @@ end
 function ATT:COMBAT_LOG_EVENT_UNFILTERED(...)	
     if not self:IsShown() then return end	
     local _, event, sourceGUID, sourceName, _, destGUID, destName, _, spellId, spellName, _, _, _, _, _ = select(1,...)
-    if self:GetUnitByGUID(sourceGUID) and event == "SPELL_CAST_SUCCESS" then
-		self:StartCooldown(spellId, self:GetUnitByGUID(sourceGUID)) 	
+    if event ~= "SPELL_CAST_SUCCESS" then return end
+    local unit = self:GetUnitByGUID(sourceGUID)
+    if unit then
+		self:StartCooldown(spellId, unit)
     end	
-	if db.glow and self:GetUnitByGUID(destGUID) and self:GetUnitByGUID(sourceGUID) and ((event == "SPELL_AURA_REMOVED") or (event == "SPELL_AURA_APPLIED")) and (auraType == "BUFF")  then 	
-		self:IconGlow(self:GetUnitByGUID(sourceGUID), self:GetUnitByGUID(destGUID),spellName, event); 	
-	end 	
 end
 
 
@@ -929,12 +926,14 @@ local function ATT_OnUpdate(self,elapsed)
 		ATT:QuerySpecInfo(elapsed)
 		
 		--  Update icon activity
+		local expired
 		for k,icon in ipairs(iconlist) do
 			if icon.active and icon.cooldown then
 				icon.timeleft = icon.starttime + icon.cooldown - GetTime()
 				if icon.timeleft <= 0 then
 					if not icon.showing then icon:Hide() end
 					icon.active = nil
+					expired = true
 					if icon.maxcharges then
 						local charges = tonumber(icon.chargesText:GetText():match("^[0-9]+$"))
 						charges = math.min(icon.maxcharges, charges+1)
@@ -946,7 +945,7 @@ local function ATT_OnUpdate(self,elapsed)
 				end
 			end 
 		end		
-		if db.hidden then ATT:UpdateIcons() end	
+		if db.hidden and expired then ATT:UpdateIcons() end
 		-- Update Timers
 		if #timers > 0 then
 			for i=#timers,1,-1 do 
@@ -990,17 +989,22 @@ function ATT:CHAT_MSG_ADDON(prefix, message, dist, sender)
 end
 
 
+local talentActivationSpells = {}
+for _, spellId in ipairs(TALENT_ACTIVATION_SPELLS) do
+	local spellName = GetSpellInfo(spellId)
+	if spellName then talentActivationSpells[spellName] = true end
+end
+
 function ATT:UNIT_SPELLCAST_SUCCEEDED(unit,ability)
 	if unit == "player" then return end
 	local pIndex = match(unit,"party[pet]*([1-4])")
 
-	-- XXX this only supports the english client (supposedly)
 	if pIndex then
 		pIndex = tonumber(pIndex)
 		if not anchors[pIndex] then return end -- Should not happen
 		local anchor = anchors[pIndex]
 		local actualUnit = "party"..pIndex -- don't query pet
-		if ability == "Activate Primary Spec" or ability == "Activate Secondary Spec" then
+		if talentActivationSpells[ability] then
 			anchor.spec = nil
 			return
 		end
@@ -1020,7 +1024,6 @@ local function ATT_OnLoad(self, event)
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self:RegisterEvent("PARTY_MEMBERS_CHANGED")
 	self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-    self:RegisterEvent("INSPECT_READY") 
     self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 	if self.useCrossAddonCommunication then self:RegisterEvent("CHAT_MSG_ADDON") end
 	self:SetScript("OnEvent",function(self,event, ...) if self[event] then self[event](self, ...) end end);	
@@ -1049,7 +1052,8 @@ function ATT:FindAbilityIcon(ability, id)
 	if id then
 		icon = GetSpellTexture(id)
 	else
-		icon = GetSpellTexture(self:FindAbilityID(ability))
+		local foundID = self:FindAbilityID(ability)
+		icon = foundID and GetSpellTexture(foundID)
 	end
 	return icon
 end
@@ -1058,10 +1062,10 @@ function ATT:FindAbilityID(ability)
 	for _,S in pairs(SPELLDB) do
 		for _,v in pairs(S) do
 			for _,sp in pairs(v) do
-				for _,SPELLID in pairs(sp) do
-					local spellName, spellRank, spellIcon = GetSpellInfo(SPELLID)
+				for _,spell in pairs(sp) do
+					local spellName, spellRank, spellIcon = GetSpellInfo(spell[1])
 					if(spellName and spellName == ability) then
-						return SPELLID
+						return spell[1]
 					end
 				end
 			end
@@ -1113,6 +1117,7 @@ end
 	function ATT:CreateOptions()	
 	local panel = SO.AddOptionsPanel("Arena Team Tracker", function() end)	
 	self.panel = panel	
+	panel.cancel = function() end
 	SO.AddSlashCommand("Arena Team Tracker","/att")	
 	local scale = panel:MakeSlider(	
 	     'name', 'Scale',	
@@ -1142,7 +1147,7 @@ end
 			ATT:LoadPositions(); ATT:ApplyAnchorSettings();	
 		else	
 			print("Wrong value for Offset X/Y")	
-			self:SetText(db.offsetX)	
+			self:SetText(db.offsetX or "0")
 		end	
 	end)	
 	panel.offsetX = offsetX
@@ -1160,7 +1165,7 @@ end
 			ATT:LoadPositions(); ATT:ApplyAnchorSettings();	
 		else	
 			print("Wrong value for Offset X/Y")	
-			self:SetText(db.offsetY)	
+			self:SetText(db.offsetY or "0")
 		end	
 	end)	
 	panel.offsetY = offsetY	
@@ -1265,7 +1270,7 @@ end
 	     'description', 'Draw borders around icons',	
 	     'default', true,	
 	     'getFunc', function() return db.showIconBorders end,	
-	     'setFunc', function(value) db.showIconBorders = value; ATT:LoadPositions();ATT:ApplyAnchorSettings(); ATT:PARTY_MEMBERS_CHANGED() end)	
+	     'setFunc', function(value) db.showIconBorders = value; ATT:LoadPositions();ATT:ApplyAnchorSettings(); ATT:UpdateAnchors() end)	
 	showIconBorders:SetPoint("LEFT",horizontal,"RIGHT",65,0)	
 	
 	local arena = panel:MakeToggle(	
@@ -1305,7 +1310,7 @@ end
 	     'description', 'Show PvP Trinket',	
 	     'default', false,	
 	     'getFunc', function() return db.showTrinket end,	
-	     'setFunc', function(value) db.showTrinket = value; ATT:LoadPositions();ATT:ApplyAnchorSettings(); ATT:PARTY_MEMBERS_CHANGED() end)	
+	     'setFunc', function(value) db.showTrinket = value; ATT:LoadPositions();ATT:ApplyAnchorSettings(); ATT:UpdateAnchors() end)	
 	showTrinket:SetPoint("TOPLEFT",arena,"TOPLEFT",0,-45)
 	
 	local showRacial = panel:MakeToggle(	
@@ -1313,7 +1318,7 @@ end
 	     'description', 'Show Racial icons',	
 	     'default', false,	
 	     'getFunc', function() return db.showRacial end,	
-	     'setFunc', function(value) db.showRacial = value; ATT:LoadPositions(); ATT:ApplyAnchorSettings(); ATT:PARTY_MEMBERS_CHANGED() end)
+	     'setFunc', function(value) db.showRacial = value; ATT:LoadPositions(); ATT:ApplyAnchorSettings(); ATT:UpdateAnchors() end)
 	showRacial:SetPoint("LEFT",showTrinket,"RIGHT",50,0)
 	
 	local showSelf = panel:MakeToggle(	
@@ -1357,8 +1362,8 @@ function ATT:UpdateScrollBar()
 		for abilityIndex, abilityTable in pairs(abilities) do
 			local ability, id, cooldown, maxcharges, talent, spellStatus = abilityTable.ability, abilityTable.id, abilityTable.cooldown, abilityTable.maxcharges, abilityTable.talent, abilityTable.spellStatus
 			local order = abilityTable.order or 1	
-            spectexture  =  "Interface\\Buttons\\UI-MicroButton-"..db.classSelected
-		    abilitytexture = self:FindAbilityIcon(ability, id)
+            local spectexture  =  "Interface\\Buttons\\UI-MicroButton-"..db.classSelected
+		    local abilitytexture = self:FindAbilityIcon(ability, id)
 			
 			if spellStatus ~= "DISABLED" then
 			    btns[line]:SetText("   |T"..(abilitytexture or "")..":18|t " ..ability)
