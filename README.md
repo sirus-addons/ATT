@@ -2,3 +2,8 @@ Arena Team Tracker. Модификация, позволяющая отслеж�
 Базовая версия включает большую часть активных заклинаний, а также расовых способностей. К тому же, позволяет отдельным меню выводить свои способности. Настройка и меню - на английском языке.
 
 Контекстное меню настройки - /att
+
+**Скриншоты:**
+
+![](https://raw.githubusercontent.com/sirus-addons/ATT/master/.screenshots/1.webp)
+![](https://raw.githubusercontent.com/sirus-addons/ATT/master/.screenshots/2.webp)
