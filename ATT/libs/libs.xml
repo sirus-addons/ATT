@@ -2,7 +2,6 @@
 ..\FrameXML\UI.xsd">
         <Script file="LibStub\LibStub.lua"/>
         <Include file="LibButtonFlash-1.0.xml"/>
-        <Script file="MSA-DropDownMenu-1.0.lua"/>
         <Script  file="LibButtonGlow-1.0.lua" />
 		<Script file="LibSimpleOptions-1.01.lua" />
 </Ui>

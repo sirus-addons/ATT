@@ -143,7 +143,6 @@ local addon, ATTdefault = ...
 			{18708, 180}, -- Fel Domination
 			{48011, 8},   -- Devour Magic
 			{48020, 30},  -- Demonic Circle: Teleport
-			{18708, 180}, -- Fel Domination
 		},
 		["Affliction"] = {
 		},
